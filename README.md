@@ -1,42 +1,156 @@
-# Linux Distro Deployer
+Linux Distro Deployer
 
-Tiny, no-nonsense scripts for writing **bootable USB installers** (Ubuntu, Arch, Debian) and for secure reinstalls using **LUKS2 encryption** (delete old OS partition → recreate → install Ubuntu).
+Tiny, no-nonsense scripts for writing bootable USB installers (Ubuntu, Arch, Debian) and a secure reinstall flow using LUKS2 encryption (delete old OS partition → recreate → encrypt → install Ubuntu).
 
- ⚠️ **Danger:** These commands **overwrite disks**. Double-check device names (e.g., `/dev/sda`, `/dev/nvme0n1`) before running anything. You are responsible for your data.
+⚠️ Danger: These commands overwrite disks. Triple-check device names (e.g. /dev/sda, /dev/nvme0n1) before running. You are responsible for your data.
 
-
-
-## Repository Layout
-
+Repository Layout
 linux-distro-deployer/
 ├─ README.md
 ├─ .gitignore
 └─ scripts/
-└─ write-os-usb.sh
+   └─ write-os-usb.sh
 
-markdown
+Requirements
 
+Linux host with bash, sudo, and lsblk
 
+1× USB drive (will be erased)
 
+ISO files (the script can fetch well-known defaults)
 
-## Features
+Quick Start (USB Installer)
 
-- **Bootable USB creation**: `scripts/write-os-usb.sh` writes a distro ISO to a USB drive (Ubuntu, Arch, Debian).
-- **Secure reinstall guide**: step-by-step flow to remove an old OS partition, create a new one, encrypt it with **LUKS2**, and point the Ubuntu installer at it.
-- **Useful snippets** for:
-  - Unmounting / wiping partition signatures
-  - Refreshing the kernel’s partition view
-  - Checking which processes hold a device open
-  - Soft re-plugging a USB root port
-  - Creating / encrypting partitions (LUKS2)
+Make the script executable
+
+chmod +x scripts/write-os-usb.sh
 
 
+Identify your USB device (double-check!)
+
+lsblk -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E 'sd.|nvme'
+# or after plugging the USB: dmesg --follow   # watch the new device name appear
+
+
+Run one of these (replace /dev/sdX as needed):
+
+# Ubuntu 24.04.1 LTS (default)
+sudo scripts/write-os-usb.sh /dev/sdX ubuntu
+
+# Arch (latest)
+sudo scripts/write-os-usb.sh /dev/sdX arch
+
+# Debian 12.6 netinst (default)
+sudo scripts/write-os-usb.sh /dev/sdX debian
+
+
+Tip: If your USB shows as NVMe, it may look like /dev/nvme0n1 (use the disk, not a partition like nvme0n1p1).
+
+(Optional) Verify ISO Checksums
+
+If you manually download ISOs:
+
+sha256sum /path/to/distro.iso
+# Compare against the official checksum from the distro’s website
+
+Secure Reinstall with LUKS2 (Ubuntu)
+
+These steps recreate an encrypted root and then use the Ubuntu installer to install onto it.
+
+Boot from any Ubuntu live USB and choose “Try Ubuntu”.
+
+Delete old OS partition and create a new target partition (or reuse an empty one):
+
+# Example: wipe signatures on the old root partition (be sure this is the right one!)
+sudo umount -R /dev/sda2 2>/dev/null || true
+sudo swapoff -a 2>/dev/null || true
+sudo wipefs -a /dev/sda2
+sudo partprobe /dev/sda && sudo udevadm settle
+
+
+Encrypt with LUKS2 and format:
+
+# Create LUKS2 container
+sudo cryptsetup luksFormat --type luks2 /dev/sda2
+# Open it as "cryptroot"
+sudo cryptsetup open /dev/sda2 cryptroot
+
+# Make filesystem inside the mapper device
+sudo mkfs.ext4 -L rootfs /dev/mapper/cryptroot
+
+
+(U)EFI system partition
+Make sure you have an EFI System Partition (ESP), e.g. /dev/sda1 ~512 MB, FAT32 with the esp/boot flag:
+
+# If needed, (re)create and format:
+# sudo mkfs.vfat -F32 /dev/sda1
+
+
+Run the Ubuntu installer and choose “Something else”:
+
+Select /dev/mapper/cryptroot → Use as: Ext4 journaling file system → Mount point: /
+
+Ensure the EFI partition /dev/sda1 is mounted at /boot/efi (do not format it if you want to keep other boot entries)
+
+Device for bootloader installation: the disk (e.g. /dev/sda), not a partition
+
+Continue installation. The installer will detect and configure the LUKS setup.
+
+After reboot, you’ll be prompted for your LUKS passphrase during early boot.
+
+Useful Snippets
+
+Unmount / wipe signatures:
+
+sudo umount -R /dev/sdX* 2>/dev/null || true
+sudo swapoff -a 2>/dev/null || true
+sudo wipefs -a /dev/sdX
+
+
+Refresh kernel partition view:
+
+sudo partprobe /dev/sdX
+sudo udevadm settle
+
+
+Check what’s holding a device open:
+
+sudo fuser -mv /dev/sdX
+# or
+sudo lsof | grep sdX
+
+
+“Soft” re-plug a USB root port (advanced, use with care):
+
+# Find the bus ID: ls -l /sys/bus/usb/devices | grep -E '^[0-9]-'
+# Example bus ID: 1-2
+echo 1-2 | sudo tee /sys/bus/usb/drivers/usb/unbind
+sleep 1
+echo 1-2 | sudo tee /sys/bus/usb/drivers/usb/bind
+
+Troubleshooting
+
+USB won’t boot: Some firmware prefers GPT + EFI. Ensure your target machine is set to UEFI mode and the ISO supports it (Ubuntu/Arch/Debian do).
+
+Write errors: Try a different port or cable; check dmesg for I/O errors.
+
+Device busy: Use fuser/lsof (above), then unmount/stop services before writing.
+
+Secure boot issues: If installing proprietary drivers, you may need to toggle Secure Boot or enroll a MOK.
+
+Notes
+
+The script uses standard Linux tools and will erase the target device. Read it before running.
+
+LUKS2 defaults are sensible; you can tune --cipher, --hash, --pbkdf if you know what you’re doing.
 
 ## Requirements
 
 - Linux with `bash`
 - Tools: `wget`, `dd`, `lsblk`, `parted`, `wipefs`
 - Optional: `lsof`, `cryptsetup`, `nvme-cli`
+
+
 
 Install examples:
 
