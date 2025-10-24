@@ -1,69 +1,82 @@
 # Linux Distro Deployer
 
-Tiny, no-nonsense scripts for writing **bootable USB installers** (Ubuntu, Arch, Debian) and handy one-liners for partitioning, wiping signatures, and troubleshooting busy devices.
+Tiny, no-nonsense scripts for writing **bootable USB installers** (Ubuntu, Arch, Debian) and for secure reinstalls using **LUKS2 encryption** (delete old OS partition → recreate → install Ubuntu).
 
-> ⚠️ **Danger:** These commands **overwrite disks**. Double-check device names (e.g. `/dev/sda`) before running anything. You are responsible for your data.
+> ⚠️ **Danger:** These commands **overwrite disks**. Double-check device names (e.g., `/dev/sda`, `/dev/nvme0n1`) before running anything. You are responsible for your data.
+
+---
+
+## Repository Layout
+
+linux-distro-deployer/
+├─ README.md
+├─ .gitignore
+└─ scripts/
+└─ write-os-usb.sh
+
+markdown
 
 
+---
 
 ## Features
 
-- `scripts/write-os-usb.sh`: one command to download (or use a local ISO) and `dd` it to a USB.
-- Practical snippets for:
+- **Bootable USB creation**: `scripts/write-os-usb.sh` writes a distro ISO to a USB drive (Ubuntu, Arch, Debian).
+- **Secure reinstall guide**: step-by-step flow to remove an old OS partition, create a new one, encrypt it with **LUKS2**, and point the Ubuntu installer at it.
+- **Useful snippets** for:
   - Unmounting / wiping partition signatures
   - Refreshing the kernel’s partition view
   - Checking which processes hold a device open
-  - Soft re-plugging a USB bus
+  - Soft re-plugging a USB root port
   - Creating / encrypting partitions (LUKS2)
 
+---
 
 ## Requirements
 
 - Linux with `bash`
-- `wget`, `dd`, `lsblk`, `parted`, `wipefs`
+- Tools: `wget`, `dd`, `lsblk`, `parted`, `wipefs`
 - Optional: `lsof`, `cryptsetup`, `nvme-cli`
 
-Install missing bits (examples):
+Install examples:
 
-
+```bash
 # Debian/Ubuntu
 sudo apt-get update && sudo apt-get install -y wget parted util-linux lsof cryptsetup
 
 # Arch
 sudo pacman -S --needed wget parted lsof cryptsetup
-Quick Start – USB ISO Installer
-You can either use the repo script at scripts/write-os-usb.sh or save it as your own file ~/usb_iso_installer.sh.
+Quick Start — Use the Existing USB Script
+You already have a script to write ISOs to USB. Use either the repo copy or your own copy—you don’t need to modify its code here.
 
 Option A: Use the repo script
 bash
 
 # From the repo root
 chmod +x scripts/write-os-usb.sh
-sudo ./scripts/write-os-usb.sh /dev/sda ubuntu
-Option B: Save it as ~/usb_iso_installer.sh
+sudo ./scripts/write-os-usb.sh /dev/sdX ubuntu
+Option B: Use your own saved script
 bash
 
-# 1) save it
-nano ~/usb_iso_installer.sh   # paste the script, save
+# Save it (if you haven't already)
+nano ~/usb_iso_installer.sh   # paste your existing script, save
 
-# 2) make it executable
+# Make it executable
 chmod +x ~/usb_iso_installer.sh
-chmod +x ./usb_iso_installer.sh   # if you are in the same folder
 
-# 3) Run ONE of these (replace /dev/sda if needed)
-# Ubuntu 24.04.1 (default)
-sudo ./usb_iso_installer.sh /dev/sda ubuntu
-The script accepts {ubuntu|arch|debian} and an optional ISO path/URL.
-Use a local ISO like:
-sudo ./usb_iso_installer.sh /dev/sda ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
+# Run it (replace /dev/sdX with your USB device)
+sudo ./usb_iso_installer.sh /dev/sdX ubuntu
+The script accepts {ubuntu|arch|debian} and optionally a local ISO path or URL.
+Example (local ISO):
+sudo ./usb_iso_installer.sh /dev/sdX ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
 
 Identify your USB device first:
 
 bash
 
 lsblk -o NAME,SIZE,MODEL,TRAN
-# Note the WHOLE DISK, e.g. /dev/sda (not /dev/sda1)
-Script Reference: write-os-usb.sh
+# Use the WHOLE DISK (e.g., /dev/sda), NOT a partition like /dev/sda1.
+Script Reference — write-os-usb.sh (how to use)
 Usage:
 
 bash
@@ -71,15 +84,15 @@ bash
 sudo ./scripts/write-os-usb.sh /dev/sdX {ubuntu|arch|debian} [ISO_PATH_OR_URL]
 Notes:
 
-Pass the whole disk (e.g., /dev/sda), not a partition like /dev/sda1.
+Pass the whole disk (e.g., /dev/sda), not /dev/sda1.
 
 Defaults:
 
-Ubuntu version via UB_VER env var (default 24.04.1)
+Ubuntu: UB_VER=24.04.1
 
-Debian version via DB_VER env var (default 12.6.0)
+Debian: DB_VER=12.6.0
 
-If ISO_PATH_OR_URL is an http(s):// URL, the script fetches to /tmp before writing.
+If ISO_PATH_OR_URL is an http(s):// URL, the script downloads to /tmp then writes.
 
 Examples:
 
@@ -96,83 +109,124 @@ sudo ./scripts/write-os-usb.sh /dev/sda debian
 
 # Use a local ISO explicitly
 sudo ./scripts/write-os-usb.sh /dev/sda ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
-Troubleshooting a “Busy” Device
+Secure Reinstall Cheat-Sheet (Delete Partition → LUKS2 → Install Ubuntu)
+Purpose: Replace an existing OS partition with an encrypted Ubuntu root.
+Flow: Identify → Delete old OS partition → Create new partition → LUKS2 encrypt → Make ext4 → Install Ubuntu (Something else).
+
+0) Identify the right devices
 bash
 
-# Who has the USB open?
-sudo lsof /dev/sda /dev/sda?*
+# Disks and transport (SATA/NVMe/USB)
+lsblk -o NAME,SIZE,MODEL,TRAN
 
-# Nudge a stuck dd (replace PIDs as needed)
+# Filesystem types and mount points
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT
+
+# Choose your target disk (example)
+DISK=/dev/nvme0n1
+
+# Inspect layout
+lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT $DISK
+1) Delete the old OS partition (example uses p3)
+bash
+
+# ⚠️ Replace '3' with your actual partition number
+sudo parted $DISK --script rm 3
+
+# Show the new FREE region (note Start/End in MiB)
+sudo parted -s $DISK unit MiB print free
+Example FREE range (yours will differ):
+Start: 1625MiB → End: 154055MiB
+
+2) Create a new partition in the free space
+bash
+
+# Replace with YOUR free-range bounds
+START=1625MiB
+END=154055MiB
+
+sudo parted -s $DISK -a optimal mkpart primary ext4 $START $END
+sudo parted -s $DISK name 3 ubuntu-root   # adjust number if different
+sudo partprobe $DISK
+
+# Confirm it appeared
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT $DISK
+3) Encrypt the new partition with LUKS2
+bash
+
+PART=${DISK}p3   # adjust if number differs
+
+# Initialize LUKS2 (you'll set a passphrase)
+sudo cryptsetup luksFormat --type luks2 -s 512 -h sha256 -c aes-xts-plain64 $PART
+
+# Open (map) it
+sudo cryptsetup open $PART cryptroot
+4) Create filesystem inside the encrypted mapper
+bash
+
+sudo mkfs.ext4 -L ubuntu-root /dev/mapper/cryptroot
+
+# Optional quick check
+sudo mkdir -p /mnt/cryptroot
+sudo mount /dev/mapper/cryptroot /mnt/cryptroot
+df -h /mnt/cryptroot
+sudo umount /mnt/cryptroot
+
+# Close until the installer uses it
+sudo cryptsetup close cryptroot
+5) Install Ubuntu (manual “Something else”)
+Boot the Ubuntu USB you created.
+
+Choose “Something else.”
+
+Select your EFI System Partition (usually 100–500 MiB, FAT32):
+
+Use as: EFI System Partition
+
+Mount point: /boot/efi
+
+Do not format
+
+Select the new encrypted root:
+
+Unlock it (enter LUKS passphrase)
+
+Choose the mapped device (e.g., /dev/mapper/cryptroot)
+
+Use as: Ext4
+
+Mount point: /
+
+Format: Yes
+
+Proceed with the install. The installer writes /etc/crypttab and /etc/fstab for you.
+
+Troubleshooting (“Device busy”, USB oddities)
+bash
+
+# Who has the device open?
+sudo lsof /dev/sda /dev/sda?*            # or /dev/nvme0n1 /dev/nvme0n1p?
+
+# If dd is stuck, send it Ctrl+C (replace PID):
 ps -o pid,stat,cmd -p 45556,49939
-sudo kill -INT 45556    # like Ctrl+C for dd
+sudo kill -INT 45556
 
-# Soft re-plug the USB root port (adjust bus like "1-5")
+# Soft re-plug a USB root port (adjust bus ID like "1-5")
 echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/unbind
 sleep 2
 echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/bind
-Handy Disk Ops (Optional)
-Clean up and write an ISO manually
+
+# Refresh partition table and re-check
+sudo partprobe /dev/sda || sudo blockdev --rereadpt /dev/sda
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL /dev/sda
+sudo blkid /dev/sda*
+Post-Install Tips
+BIOS/UEFI: Disable Fast Boot so you can reach boot menus.
+
+Data volumes: Consider a separate encrypted /data or /home.
+
+Add another LUKS key:
+
 bash
 
-ISO=~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
-DEV=/dev/sda
-
-sudo umount ${DEV}?* 2>/dev/null || true
-sudo wipefs -a $DEV
-sudo dd if="$ISO" of="$DEV" bs=4M status=progress conv=fsync
-sudo partprobe $DEV
-Inspect free space
-bash
-
-sudo parted -s $DEV unit MiB print free
-lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT $DEV
-Example: Reclaim a Fedora partition and create a new Ubuntu root
-bash
-
-DISK=/dev/nvme0n1
-
-# Double-check the disk layout
-lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT $DISK
-
-# Delete the Fedora partition (e.g., p3) — VERIFY before running!
-sudo parted $DISK --script rm 3
-
-# Show free ranges to pick START/END (example numbers below)
-sudo parted -s $DISK unit MiB print free
-
-# Example free space:
-# Start: 1625MiB  End: 154055MiB
-sudo parted -s $DISK -a optimal mkpart primary ext4 1625MiB 154055MiB
-sudo parted -s $DISK name 3 ubuntu-root
-sudo partprobe $DISK
-
-# (Optional) LUKS2 encryption
-PART=${DISK}p3
-sudo cryptsetup luksFormat --type luks2 -s 512 -h sha256 -c aes-xts-plain64 $PART
-sudo cryptsetup open $PART cryptroot
-sudo mkfs.ext4 -L ubuntu-root /dev/mapper/cryptroot
-sudo cryptsetup close cryptroot
-Installer Notes
-In Ubuntu’s installer, choose “Something else” to select:
-
-/boot/efi = your existing EFI partition (do not format)
-
-/ = your new ext4 (or mapped LUKS) partition
-
-For ML/dev workstations, plan 150–200 GB for / and keep datasets on /data.
-
-Repository Layout
-lua
-
-linux-distro-deployer/
-├─ README.md
-├─ .gitignore
-└─ scripts/
-   └─ write-os-usb.sh
-
-
-
-
-
-
-
+sudo cryptsetup luksAddKey ${DISK}p3
