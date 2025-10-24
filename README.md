@@ -41,192 +41,165 @@ markdown
 Install examples:
 
 ```bash
+# ==============================================================================
+# Linux Distro Deployer — ONE-FILE INSTRUCTIONS (ALL COMMENTED)
+# Purpose:
+#   - Use your existing USB writer script to make bootable installers
+#   - Secure reinstall flow: delete old OS partition → create new → LUKS2 encrypt → install Ubuntu
+# Notes:
+#   - EVERYTHING here is comments. Remove the leading "# " to run a command.
+#   - ⚠️ These operations can erase data. Triple-check device names.
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# REQUIREMENTS (install tools)
+# ------------------------------------------------------------------------------
+
 # Debian/Ubuntu
-sudo apt-get update && sudo apt-get install -y wget parted util-linux lsof cryptsetup
+# sudo apt-get update && sudo apt-get install -y wget parted util-linux lsof cryptsetup
 
 # Arch
-sudo pacman -S --needed wget parted lsof cryptsetup
-Quick Start — Use the Existing USB Script
-You already have a script to write ISOs to USB. Use either the repo copy or your own copy—you don’t need to modify its code here.
+# sudo pacman -S --needed wget parted lsof cryptsetup
 
-Option A: Use the repo script
-bash
 
-# From the repo root
-chmod +x scripts/write-os-usb.sh
-sudo ./scripts/write-os-usb.sh /dev/sdX ubuntu
-Option B: Use your own saved script
-bash
+# ------------------------------------------------------------------------------
+# QUICK START — USE YOUR EXISTING USB WRITER SCRIPT
+# You already have a script that writes ISOs to a USB. You don't need to edit it.
+# Pick either the repo copy or your own saved copy.
+# ------------------------------------------------------------------------------
 
-# Save it (if you haven't already)
-nano ~/usb_iso_installer.sh   # paste your existing script, save
+# Option A: Use the repo script
+# (From the repo root)
+# chmod +x scripts/write-os-usb.sh
+# sudo ./scripts/write-os-usb.sh /dev/sdX ubuntu
+#   - Replace /dev/sdX with your USB device (e.g., /dev/sda). Use the WHOLE disk, not /dev/sda1.
 
-# Make it executable
-chmod +x ~/usb_iso_installer.sh
+# Option B: Use your own saved script
+# nano ~/usb_iso_installer.sh            # paste your existing script, save
+# chmod +x ~/usb_iso_installer.sh
+# sudo ./usb_iso_installer.sh /dev/sdX ubuntu
 
-# Run it (replace /dev/sdX with your USB device)
-sudo ./usb_iso_installer.sh /dev/sdX ubuntu
-The script accepts {ubuntu|arch|debian} and optionally a local ISO path or URL.
-Example (local ISO):
-sudo ./usb_iso_installer.sh /dev/sdX ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
+# The script accepts {ubuntu|arch|debian} and an optional local ISO path or URL.
+# Example (local ISO):
+# sudo ./usb_iso_installer.sh /dev/sdX ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
 
-Identify your USB device first:
+# Identify your USB device first (WHOLE disk, not a partition):
+# lsblk -o NAME,SIZE,MODEL,TRAN
 
-bash
 
-lsblk -o NAME,SIZE,MODEL,TRAN
-# Use the WHOLE DISK (e.g., /dev/sda), NOT a partition like /dev/sda1.
-Script Reference — write-os-usb.sh (how to use)
-Usage:
+# ------------------------------------------------------------------------------
+# SCRIPT REFERENCE — write-os-usb.sh (HOW TO USE, NOT THE CODE)
+# ------------------------------------------------------------------------------
 
-bash
+# Usage:
+# sudo ./scripts/write-os-usb.sh /dev/sdX {ubuntu|arch|debian} [ISO_PATH_OR_URL]
 
-sudo ./scripts/write-os-usb.sh /dev/sdX {ubuntu|arch|debian} [ISO_PATH_OR_URL]
-Notes:
+# Notes:
+# - Pass the WHOLE disk (e.g., /dev/sda), not /dev/sda1.
+# - Defaults:
+#     Ubuntu: UB_VER=24.04.1
+#     Debian: DB_VER=12.6.0
+# - If ISO_PATH_OR_URL is http(s)://, the script downloads to /tmp then writes.
 
-Pass the whole disk (e.g., /dev/sda), not /dev/sda1.
+# Examples:
+# sudo ./scripts/write-os-usb.sh /dev/sda ubuntu
+# sudo ./scripts/write-os-usb.sh /dev/sda arch
+# sudo ./scripts/write-os-usb.sh /dev/sda debian
+# sudo ./scripts/write-os-usb.sh /dev/sda ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
 
-Defaults:
 
-Ubuntu: UB_VER=24.04.1
+# ------------------------------------------------------------------------------
+# SECURE REINSTALL CHEAT-SHEET
+# Replace existing OS partition with encrypted Ubuntu root (LUKS2)
+# Flow: Identify → Delete old OS partition → Create new partition → LUKS2 → mkfs → Install
+# ------------------------------------------------------------------------------
 
-Debian: DB_VER=12.6.0
+# 0) Identify the right devices
+# lsblk -o NAME,SIZE,MODEL,TRAN
+# lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT
+# DISK=/dev/nvme0n1                          # example target disk
+# lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT $DISK
 
-If ISO_PATH_OR_URL is an http(s):// URL, the script downloads to /tmp then writes.
+# 1) Delete the old OS partition (example uses p3)  ⚠️ VERIFY NUMBER
+# sudo parted $DISK --script rm 3
+# sudo parted -s $DISK unit MiB print free     # note Start/End of FREE region
 
-Examples:
+# Example FREE range (yours will differ):
+# Start: 1625MiB
+# End:   154055MiB
 
-bash
+# 2) Create a new partition in the free space
+# START=1625MiB                                # replace with YOUR Start
+# END=154055MiB                                # replace with YOUR End
+# sudo parted -s $DISK -a optimal mkpart primary ext4 $START $END
+# sudo parted -s $DISK name 3 ubuntu-root      # adjust number if not 3
+# sudo partprobe $DISK
+# lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT $DISK
 
-# Ubuntu (default version)
-sudo ./scripts/write-os-usb.sh /dev/sda ubuntu
+# 3) Encrypt the new partition with LUKS2
+# PART=${DISK}p3                               # adjust if different
+# sudo cryptsetup luksFormat --type luks2 -s 512 -h sha256 -c aes-xts-plain64 $PART
+# sudo cryptsetup open $PART cryptroot
 
-# Arch (latest)
-sudo ./scripts/write-os-usb.sh /dev/sda arch
+# 4) Create filesystem inside the encrypted mapper
+# sudo mkfs.ext4 -L ubuntu-root /dev/mapper/cryptroot
 
-# Debian (netinst)
-sudo ./scripts/write-os-usb.sh /dev/sda debian
-
-# Use a local ISO explicitly
-sudo ./scripts/write-os-usb.sh /dev/sda ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
-Secure Reinstall Cheat-Sheet (Delete Partition → LUKS2 → Install Ubuntu)
-Purpose: Replace an existing OS partition with an encrypted Ubuntu root.
-Flow: Identify → Delete old OS partition → Create new partition → LUKS2 encrypt → Make ext4 → Install Ubuntu (Something else).
-
-0) Identify the right devices
-bash
-
-# Disks and transport (SATA/NVMe/USB)
-lsblk -o NAME,SIZE,MODEL,TRAN
-
-# Filesystem types and mount points
-lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT
-
-# Choose your target disk (example)
-DISK=/dev/nvme0n1
-
-# Inspect layout
-lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT $DISK
-1) Delete the old OS partition (example uses p3)
-bash
-
-# ⚠️ Replace '3' with your actual partition number
-sudo parted $DISK --script rm 3
-
-# Show the new FREE region (note Start/End in MiB)
-sudo parted -s $DISK unit MiB print free
-Example FREE range (yours will differ):
-Start: 1625MiB → End: 154055MiB
-
-2) Create a new partition in the free space
-bash
-
-# Replace with YOUR free-range bounds
-START=1625MiB
-END=154055MiB
-
-sudo parted -s $DISK -a optimal mkpart primary ext4 $START $END
-sudo parted -s $DISK name 3 ubuntu-root   # adjust number if different
-sudo partprobe $DISK
-
-# Confirm it appeared
-lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT $DISK
-3) Encrypt the new partition with LUKS2
-bash
-
-PART=${DISK}p3   # adjust if number differs
-
-# Initialize LUKS2 (you'll set a passphrase)
-sudo cryptsetup luksFormat --type luks2 -s 512 -h sha256 -c aes-xts-plain64 $PART
-
-# Open (map) it
-sudo cryptsetup open $PART cryptroot
-4) Create filesystem inside the encrypted mapper
-bash
-
-sudo mkfs.ext4 -L ubuntu-root /dev/mapper/cryptroot
-
-# Optional quick check
-sudo mkdir -p /mnt/cryptroot
-sudo mount /dev/mapper/cryptroot /mnt/cryptroot
-df -h /mnt/cryptroot
-sudo umount /mnt/cryptroot
+# (Optional) Quick check
+# sudo mkdir -p /mnt/cryptroot
+# sudo mount /dev/mapper/cryptroot /mnt/cryptroot
+# df -h /mnt/cryptroot
+# sudo umount /mnt/cryptroot
 
 # Close until the installer uses it
-sudo cryptsetup close cryptroot
-5) Install Ubuntu (manual “Something else”)
-Boot the Ubuntu USB you created.
+# sudo cryptsetup close cryptroot
 
-Choose “Something else.”
+# 5) Install Ubuntu (“Something else” method)
+# - Boot from your Ubuntu USB installer.
+# - Choose “Something else”.
+# - EFI System Partition (existing, ~100–500 MiB, FAT32):
+#     Use as: EFI System Partition
+#     Mount point: /boot/efi
+#     Do NOT format
+# - Encrypted root:
+#     Select the partition, click Unlock (enter LUKS passphrase)
+#     Pick the MAPPED device (e.g., /dev/mapper/cryptroot)
+#     Use as: Ext4
+#     Mount point: /
+#     Format: Yes
+# - Proceed; the installer will write /etc/crypttab and /etc/fstab.
 
-Select your EFI System Partition (usually 100–500 MiB, FAT32):
+# Post-install tips:
+# - Disable Fast Boot in BIOS/UEFI to easily reach boot menus.
+# - Consider a separate encrypted /data or /home (repeat LUKS + mkfs).
+# - Add another LUKS key:
+#   sudo cryptsetup luksAddKey ${DISK}p3
 
-Use as: EFI System Partition
 
-Mount point: /boot/efi
-
-Do not format
-
-Select the new encrypted root:
-
-Unlock it (enter LUKS passphrase)
-
-Choose the mapped device (e.g., /dev/mapper/cryptroot)
-
-Use as: Ext4
-
-Mount point: /
-
-Format: Yes
-
-Proceed with the install. The installer writes /etc/crypttab and /etc/fstab for you.
-
-Troubleshooting (“Device busy”, USB oddities)
-bash
+# ------------------------------------------------------------------------------
+# TROUBLESHOOTING (“DEVICE BUSY”, USB ODDITIES)
+# ------------------------------------------------------------------------------
 
 # Who has the device open?
-sudo lsof /dev/sda /dev/sda?*            # or /dev/nvme0n1 /dev/nvme0n1p?
+# sudo lsof /dev/sda /dev/sda?*     # or /dev/nvme0n1 /dev/nvme0n1p?
 
-# If dd is stuck, send it Ctrl+C (replace PID):
-ps -o pid,stat,cmd -p 45556,49939
-sudo kill -INT 45556
+# If dd is stuck, send Ctrl+C (replace PID):
+# ps -o pid,stat,cmd -p 45556,49939
+# sudo kill -INT 45556
 
-# Soft re-plug a USB root port (adjust bus ID like "1-5")
-echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/unbind
-sleep 2
-echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/bind
+# Soft re-plug a USB root port (adjust bus like "1-5"):
+# echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/unbind
+# sleep 2
+# echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/bind
 
-# Refresh partition table and re-check
-sudo partprobe /dev/sda || sudo blockdev --rereadpt /dev/sda
-lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL /dev/sda
-sudo blkid /dev/sda*
-Post-Install Tips
-BIOS/UEFI: Disable Fast Boot so you can reach boot menus.
+# Refresh partition table and re-check:
+# sudo partprobe /dev/sda || sudo blockdev --rereadpt /dev/sda
+# lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL /dev/sda
+# sudo blkid /dev/sda*
 
-Data volumes: Consider a separate encrypted /data or /home.
 
-Add another LUKS key:
 
-bash
+# ==============================================================================
+# END OF FILE
+# ==============================================================================
 
-sudo cryptsetup luksAddKey ${DISK}p3
