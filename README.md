@@ -2,9 +2,9 @@
 
 Tiny, no-nonsense scripts for writing **bootable USB installers** (Ubuntu, Arch, Debian) and for secure reinstalls using **LUKS2 encryption** (delete old OS partition → recreate → install Ubuntu).
 
-> ⚠️ **Danger:** These commands **overwrite disks**. Double-check device names (e.g., `/dev/sda`, `/dev/nvme0n1`) before running anything. You are responsible for your data.
+ ⚠️ **Danger:** These commands **overwrite disks**. Double-check device names (e.g., `/dev/sda`, `/dev/nvme0n1`) before running anything. You are responsible for your data.
 
----
+
 
 ## Repository Layout
 
@@ -17,7 +17,7 @@ linux-distro-deployer/
 markdown
 
 
----
+
 
 ## Features
 
@@ -30,7 +30,7 @@ markdown
   - Soft re-plugging a USB root port
   - Creating / encrypting partitions (LUKS2)
 
----
+
 
 ## Requirements
 
@@ -52,9 +52,9 @@ Install examples:
 # ==============================================================================
 
 
-# ------------------------------------------------------------------------------
+# 
 # REQUIREMENTS (install tools)
-# ------------------------------------------------------------------------------
+# 
 
 # Debian/Ubuntu
 # sudo apt-get update && sudo apt-get install -y wget parted util-linux lsof cryptsetup
@@ -63,11 +63,11 @@ Install examples:
 # sudo pacman -S --needed wget parted lsof cryptsetup
 
 
-# ------------------------------------------------------------------------------
+# 
 # QUICK START — USE YOUR EXISTING USB WRITER SCRIPT
 # You already have a script that writes ISOs to a USB. You don't need to edit it.
 # Pick either the repo copy or your own saved copy.
-# ------------------------------------------------------------------------------
+# 
 
 # Option A: Use the repo script
 # (From the repo root)
@@ -88,9 +88,9 @@ Install examples:
 # lsblk -o NAME,SIZE,MODEL,TRAN
 
 
-# ------------------------------------------------------------------------------
+# 
 # SCRIPT REFERENCE — write-os-usb.sh (HOW TO USE, NOT THE CODE)
-# ------------------------------------------------------------------------------
+# 
 
 # Usage:
 # sudo ./scripts/write-os-usb.sh /dev/sdX {ubuntu|arch|debian} [ISO_PATH_OR_URL]
@@ -109,11 +109,11 @@ Install examples:
 # sudo ./scripts/write-os-usb.sh /dev/sda ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
 
 
-# ------------------------------------------------------------------------------
+# 
 # SECURE REINSTALL CHEAT-SHEET
 # Replace existing OS partition with encrypted Ubuntu root (LUKS2)
 # Flow: Identify → Delete old OS partition → Create new partition → LUKS2 → mkfs → Install
-# ------------------------------------------------------------------------------
+# 
 
 # 0) Identify the right devices
 # lsblk -o NAME,SIZE,MODEL,TRAN
@@ -176,9 +176,9 @@ Install examples:
 #   sudo cryptsetup luksAddKey ${DISK}p3
 
 
-# ------------------------------------------------------------------------------
+# 
 # TROUBLESHOOTING (“DEVICE BUSY”, USB ODDITIES)
-# ------------------------------------------------------------------------------
+# 
 
 # Who has the device open?
 # sudo lsof /dev/sda /dev/sda?*     # or /dev/nvme0n1 /dev/nvme0n1p?
