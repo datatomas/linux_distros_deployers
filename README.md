@@ -1,5 +1,4 @@
-Linux Distro Deployer
-
+# LINUX DISTRO DEPLOYER
 Tiny, no-nonsense scripts for writing bootable USB installers (Ubuntu, Arch, Debian) and a secure reinstall flow using LUKS2 encryption (delete old OS partition → recreate → encrypt → install Ubuntu).
 
 ⚠️ Danger: These commands overwrite disks. Triple-check device names (e.g. /dev/sda, /dev/nvme0n1) before running. You are responsible for your data.
