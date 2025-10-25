@@ -1,318 +1,171 @@
-# LINUX DISTRO DEPLOYER
-Tiny, no-nonsense scripts for writing bootable USB installers (Ubuntu, Arch, Debian) and a secure reinstall flow using LUKS2 encryption (delete old OS partition → recreate → encrypt → install Ubuntu).
-
-⚠️ Danger: These commands overwrite disks. Triple-check device names (e.g. /dev/sda, /dev/nvme0n1) before running. You are responsible for your data.
-
+Linux Distro Deployer — README
+Generated on 2025-10-25 03:04
+Overview
+Tiny, no‑nonsense scripts for writing bootable USB installers (Ubuntu, Arch, Debian) and a secure reinstall flow using LUKS2 encryption. Includes lessons learned for networking on Gigabyte AORUS X870 AORUS ELITE WIFI7 ICE motherboards and general Linux install pitfalls.
+⚠️ Danger: These commands overwrite disks. Triple‑check device names (e.g., /dev/sda, /dev/nvme0n1) before running. You are responsible for your data.
 Repository Layout
 linux-distro-deployer/
 ├─ README.md
 ├─ .gitignore
 └─ scripts/
    └─ write-os-usb.sh
-
 Requirements
+    • Linux host with bash, sudo, wget, lsblk, parted, wipefs
+    • Optional: lsof, cryptsetup, nvme-cli, ddrescue
+    • 1× USB drive (WILL BE ERASED)
+    • ISO files (script can fetch well‑known defaults)
+Install Tools Quickly
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y wget parted util-linux lsof cryptsetup ddrescue
 
-Linux host with bash, sudo, and lsblk
-
-1× USB drive (will be erased)
-
-ISO files (the script can fetch well-known defaults)
-
+# Arch
+sudo pacman -S --needed wget parted lsof cryptsetup gnu-ddrescue
 Quick Start (USB Installer)
-
-Make the script executable
-
-chmod +x scripts/write-os-usb.sh
-
-
-Identify your USB device (double-check!)
-
-lsblk -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E 'sd.|nvme'
-# or after plugging the USB: dmesg --follow   # watch the new device name appear
-
-
-Run one of these (replace /dev/sdX as needed):
-
+    • Make the script executable: chmod +x scripts/write-os-usb.sh
+    • Identify your USB device (WHOLE disk): lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL
+    • Run one of the presets (replace /dev/sdX or /dev/nvme0n1):
 # Ubuntu 24.04.1 LTS (default)
 sudo scripts/write-os-usb.sh /dev/sdX ubuntu
 
 # Arch (latest)
 sudo scripts/write-os-usb.sh /dev/sdX arch
 
-# Debian 12.6 netinst (default)
+# Debian 12 (netinst, default)
 sudo scripts/write-os-usb.sh /dev/sdX debian
-
-
-Tip: If your USB shows as NVMe, it may look like /dev/nvme0n1 (use the disk, not a partition like nvme0n1p1).
-
-(Optional) Verify ISO Checksums
-
-If you manually download ISOs:
-
+Tip: If your USB shows as NVMe, it may look like /dev/nvme0n1. Always use the disk, not a partition like nvme0n1p1.
+Optional: Verify ISO Checksums
 sha256sum /path/to/distro.iso
-# Compare against the official checksum from the distro’s website
-
+# Compare against the official checksum from the distro’s website.
 Secure Reinstall with LUKS2 (Ubuntu)
-
-These steps recreate an encrypted root and then use the Ubuntu installer to install onto it.
-
-Boot from any Ubuntu live USB and choose “Try Ubuntu”.
-
-Delete old OS partition and create a new target partition (or reuse an empty one):
-
-# Example: wipe signatures on the old root partition (be sure this is the right one!)
+These steps recreate an encrypted root and then use the Ubuntu installer. Boot a live USB and choose “Try Ubuntu”.
+# 1) Delete old OS partition and wipe signatures (EXAMPLE uses /dev/sda2 — verify yours)
 sudo umount -R /dev/sda2 2>/dev/null || true
 sudo swapoff -a 2>/dev/null || true
 sudo wipefs -a /dev/sda2
 sudo partprobe /dev/sda && sudo udevadm settle
 
-
-Encrypt with LUKS2 and format:
-
-# Create LUKS2 container
+# 2) Create LUKS2 container and open it
 sudo cryptsetup luksFormat --type luks2 /dev/sda2
-# Open it as "cryptroot"
 sudo cryptsetup open /dev/sda2 cryptroot
 
-# Make filesystem inside the mapper device
+# 3) Filesystem inside mapper
 sudo mkfs.ext4 -L rootfs /dev/mapper/cryptroot
 
+# 4) Ensure an EFI System Partition exists (e.g., /dev/sda1, ~512MiB, FAT32)
+# If needed:
+sudo mkfs.vfat -F32 /dev/sda1
+Run the Ubuntu installer → “Something else”: mount /dev/mapper/cryptroot at '/', and mount the EFI partition (/dev/sda1) at /boot/efi (do not format EFI if you keep other boot entries). Choose the disk (e.g. /dev/sda) for the bootloader.
+Disk Management Snippets
+# Show current mounts & holders
+lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,UUID
+sudo fuser -mv /dev/sdX
 
-(U)EFI system partition
-Make sure you have an EFI System Partition (ESP), e.g. /dev/sda1 ~512 MB, FAT32 with the esp/boot flag:
-
-# If needed, (re)create and format:
-# sudo mkfs.vfat -F32 /dev/sda1
-
-
-Run the Ubuntu installer and choose “Something else”:
-
-Select /dev/mapper/cryptroot → Use as: Ext4 journaling file system → Mount point: /
-
-Ensure the EFI partition /dev/sda1 is mounted at /boot/efi (do not format it if you want to keep other boot entries)
-
-Device for bootloader installation: the disk (e.g. /dev/sda), not a partition
-
-Continue installation. The installer will detect and configure the LUKS setup.
-
-After reboot, you’ll be prompted for your LUKS passphrase during early boot.
-
-Useful Snippets
-
-Unmount / wipe signatures:
-
+# Unmount / wipe signatures
 sudo umount -R /dev/sdX* 2>/dev/null || true
 sudo swapoff -a 2>/dev/null || true
 sudo wipefs -a /dev/sdX
 
-
-Refresh kernel partition view:
-
+# Refresh kernel view of partitions
 sudo partprobe /dev/sdX
 sudo udevadm settle
 
+# Write an ISO to a USB (manual, when not using the script)
+sudo dd if=~/Downloads/distro.iso of=/dev/sdX bs=4M status=progress oflag=sync
+sync
+Fast Path: Extend a Partition to the Right (No Move)
+# Example: extend /dev/nvme0n1p4 to the end (does NOT move the start)
+findmnt /dev/nvme0n1p4 && sudo umount /dev/nvme0n1p4
+sudo parted /dev/nvme0n1 ---pretend-input-tty <<'EOF'
+unit GiB
+print
+resizepart 4 100%
+Yes
+print
+quit
+EOF
+sudo partprobe /dev/nvme0n1 && sudo udevadm settle
+sudo e2fsck -f /dev/nvme0n1p4
+sudo resize2fs /dev/nvme0n1p4
+Left-Move (Start Earlier) — CLI Method
+To make a partition start earlier (e.g., move /dev/nvme0n1p4 from 430 GiB to 250 GiB), you must move data. The reliable CLI approach is backup → recreate → restore:
+DISK=/dev/nvme0n1
+OLD=$DISKp4
+BACKUP=/mnt/backup
+MNT_OLD=/mnt/old
+MNT_NEW=/mnt/new
 
-Check what’s holding a device open:
+# Backup (file-level)
+sudo e2fsck -f $OLD
+sudo mkdir -p $MNT_OLD $BACKUP
+sudo mount -o ro $OLD $MNT_OLD
+sudo rsync -aHAX --numeric-ids --info=progress2 $MNT_OLD/ $BACKUP/data/
+sudo umount $MNT_OLD
 
+# Recreate from 250 GiB → 100%
+sudo parted -s $DISK rm 4
+sudo parted -s $DISK unit GiB mkpart primary ext4 250 100%
+sudo parted -s $DISK name 4 data
+sudo partprobe $DISK
+
+# Restore
+sudo mkfs.ext4 -L data ${DISK}p4
+sudo mkdir -p $MNT_NEW
+sudo mount ${DISK}p4 $MNT_NEW
+sudo rsync -aHAX --numeric-ids --info=progress2 $BACKUP/data/ $MNT_NEW/
+sudo umount $MNT_NEW
+sudo e2fsck -f ${DISK}p4
+sudo resize2fs ${DISK}p4
+Lessons Learned: Networking on Gigabyte AORUS X870 AORUS ELITE WIFI7 ICE
+On some X870/AORUS ELITE WIFI7 ICE boards, Ethernet and Wi‑Fi may not work out‑of‑the‑box on older installers. Here are fixes that consistently bring networking up on Ubuntu 24.04/Arch (kernel 6.6+):
+    • Prefer a current kernel + linux-firmware. On Ubuntu live media, run: sudo apt-get update && sudo apt-get install -y linux-firmware
+    • Ethernet (2.5GbE, often Realtek RTL8125B/8125BG): if link is down or flaps with driver r8169, try r8168:
+# Ubuntu/Debian:
+sudo apt-get install -y r8168-dkms
+sudo modprobe -r r8169 || true
+sudo modprobe r8168
+
+# Arch:
+sudo pacman -S --needed r8168
+sudo modprobe -r r8169 || true
+sudo modprobe r8168
+    • Wi‑Fi 7 module (often Intel BE200): requires recent iwlwifi firmware. Ensure package 'linux-firmware' is updated. On Arch: sudo pacman -Syu linux-firmware. On Ubuntu: sudo apt-get install --reinstall linux-firmware.
+    • Check devices and bound drivers: lspci -nnk | grep -A3 -E 'Ethernet|Network'
+    • Quick network bring‑up:
+# Show NICs and state
+ip -br a
+# Bring Ethernet up (replace enpXsY)
+sudo ip link set enp7s0 up
+sudo dhclient -v enp7s0 || sudo NetworkManager
+
+# NetworkManager CLI examples
+nmcli device status
+nmcli dev connect enp7s0
+nmcli dev wifi rescan
+nmcli dev wifi list
+If the live installer lacks firmware and you cannot get online, copy /lib/firmware from a newer distro to a USB, then place it under /lib/firmware on the live session (temporary) and re‑load the module (e.g., modprobe r8169 or r8168, or modprobe iwlwifi).
+Troubleshooting
+    • USB won’t boot: use UEFI mode; most ISOs are hybrid GPT/EFI.
+    • Write errors: try a different port/cable; check dmesg for I/O issues.
+    • Device busy: use fuser/lsof, then unmount/stop services.
+    • Secure Boot: if using proprietary drivers, disable Secure Boot or enroll a MOK.
+# Who holds the device?
 sudo fuser -mv /dev/sdX
-# or
 sudo lsof | grep sdX
 
-
-“Soft” re-plug a USB root port (advanced, use with care):
-
-# Find the bus ID: ls -l /sys/bus/usb/devices | grep -E '^[0-9]-'
-# Example bus ID: 1-2
+# Soft re-plug a USB root port (advanced)
 echo 1-2 | sudo tee /sys/bus/usb/drivers/usb/unbind
 sleep 1
 echo 1-2 | sudo tee /sys/bus/usb/drivers/usb/bind
+Appendix: Verify & Mount Data Volume
+# After resizing:
+sudo parted /dev/nvme0n1 print free
+sudo e2fsck -f /dev/nvme0n1p4
+sudo resize2fs /dev/nvme0n1p4
 
-Troubleshooting
-
-USB won’t boot: Some firmware prefers GPT + EFI. Ensure your target machine is set to UEFI mode and the ISO supports it (Ubuntu/Arch/Debian do).
-
-Write errors: Try a different port or cable; check dmesg for I/O errors.
-
-Device busy: Use fuser/lsof (above), then unmount/stop services before writing.
-
-Secure boot issues: If installing proprietary drivers, you may need to toggle Secure Boot or enroll a MOK.
-
-Notes
-
-The script uses standard Linux tools and will erase the target device. Read it before running.
-
-LUKS2 defaults are sensible; you can tune --cipher, --hash, --pbkdf if you know what you’re doing.
-
-## Requirements
-
-- Linux with `bash`
-- Tools: `wget`, `dd`, `lsblk`, `parted`, `wipefs`
-- Optional: `lsof`, `cryptsetup`, `nvme-cli`
-
-
-
-Install examples:
-
-```bash
-# ==============================================================================
-# Linux Distro Deployer — ONE-FILE INSTRUCTIONS (ALL COMMENTED)
-# Purpose:
-#   - Use your existing USB writer script to make bootable installers
-#   - Secure reinstall flow: delete old OS partition → create new → LUKS2 encrypt → install Ubuntu
-# Notes:
-#   - EVERYTHING here is comments. Remove the leading "# " to run a command.
-#   - ⚠️ These operations can erase data. Triple-check device names.
-# ==============================================================================
-
-
-# 
-# REQUIREMENTS (install tools)
-# 
-
-# Debian/Ubuntu
-# sudo apt-get update && sudo apt-get install -y wget parted util-linux lsof cryptsetup
-
-# Arch
-# sudo pacman -S --needed wget parted lsof cryptsetup
-
-
-# 
-# QUICK START — USE YOUR EXISTING USB WRITER SCRIPT
-# You already have a script that writes ISOs to a USB. You don't need to edit it.
-# Pick either the repo copy or your own saved copy.
-# 
-
-# Option A: Use the repo script
-# (From the repo root)
-# chmod +x scripts/write-os-usb.sh
-# sudo ./scripts/write-os-usb.sh /dev/sdX ubuntu
-#   - Replace /dev/sdX with your USB device (e.g., /dev/sda). Use the WHOLE disk, not /dev/sda1.
-
-# Option B: Use your own saved script
-# nano ~/usb_iso_installer.sh            # paste your existing script, save
-# chmod +x ~/usb_iso_installer.sh
-# sudo ./usb_iso_installer.sh /dev/sdX ubuntu
-
-# The script accepts {ubuntu|arch|debian} and an optional local ISO path or URL.
-# Example (local ISO):
-# sudo ./usb_iso_installer.sh /dev/sdX ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
-
-# Identify your USB device first (WHOLE disk, not a partition):
-# lsblk -o NAME,SIZE,MODEL,TRAN
-
-
-# 
-# SCRIPT REFERENCE — write-os-usb.sh (HOW TO USE, NOT THE CODE)
-# 
-
-# Usage:
-# sudo ./scripts/write-os-usb.sh /dev/sdX {ubuntu|arch|debian} [ISO_PATH_OR_URL]
-
-# Notes:
-# - Pass the WHOLE disk (e.g., /dev/sda), not /dev/sda1.
-# - Defaults:
-#     Ubuntu: UB_VER=24.04.1
-#     Debian: DB_VER=12.6.0
-# - If ISO_PATH_OR_URL is http(s)://, the script downloads to /tmp then writes.
-
-# Examples:
-# sudo ./scripts/write-os-usb.sh /dev/sda ubuntu
-# sudo ./scripts/write-os-usb.sh /dev/sda arch
-# sudo ./scripts/write-os-usb.sh /dev/sda debian
-# sudo ./scripts/write-os-usb.sh /dev/sda ubuntu ~/Downloads/ubuntu-24.04.1-desktop-amd64.iso
-
-
-# 
-# SECURE REINSTALL CHEAT-SHEET
-# Replace existing OS partition with encrypted Ubuntu root (LUKS2)
-# Flow: Identify → Delete old OS partition → Create new partition → LUKS2 → mkfs → Install
-# 
-
-# 0) Identify the right devices
-# lsblk -o NAME,SIZE,MODEL,TRAN
-# lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT
-# DISK=/dev/nvme0n1                          # example target disk
-# lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT $DISK
-
-# 1) Delete the old OS partition (example uses p3)  ⚠️ VERIFY NUMBER
-# sudo parted $DISK --script rm 3
-# sudo parted -s $DISK unit MiB print free     # note Start/End of FREE region
-
-# Example FREE range (yours will differ):
-# Start: 1625MiB
-# End:   154055MiB
-
-# 2) Create a new partition in the free space
-# START=1625MiB                                # replace with YOUR Start
-# END=154055MiB                                # replace with YOUR End
-# sudo parted -s $DISK -a optimal mkpart primary ext4 $START $END
-# sudo parted -s $DISK name 3 ubuntu-root      # adjust number if not 3
-# sudo partprobe $DISK
-# lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT $DISK
-
-# 3) Encrypt the new partition with LUKS2
-# PART=${DISK}p3                               # adjust if different
-# sudo cryptsetup luksFormat --type luks2 -s 512 -h sha256 -c aes-xts-plain64 $PART
-# sudo cryptsetup open $PART cryptroot
-
-# 4) Create filesystem inside the encrypted mapper
-# sudo mkfs.ext4 -L ubuntu-root /dev/mapper/cryptroot
-
-# (Optional) Quick check
-# sudo mkdir -p /mnt/cryptroot
-# sudo mount /dev/mapper/cryptroot /mnt/cryptroot
-# df -h /mnt/cryptroot
-# sudo umount /mnt/cryptroot
-
-# Close until the installer uses it
-# sudo cryptsetup close cryptroot
-
-# 5) Install Ubuntu (“Something else” method)
-# - Boot from your Ubuntu USB installer.
-# - Choose “Something else”.
-# - EFI System Partition (existing, ~100–500 MiB, FAT32):
-#     Use as: EFI System Partition
-#     Mount point: /boot/efi
-#     Do NOT format
-# - Encrypted root:
-#     Select the partition, click Unlock (enter LUKS passphrase)
-#     Pick the MAPPED device (e.g., /dev/mapper/cryptroot)
-#     Use as: Ext4
-#     Mount point: /
-#     Format: Yes
-# - Proceed; the installer will write /etc/crypttab and /etc/fstab.
-
-# Post-install tips:
-# - Disable Fast Boot in BIOS/UEFI to easily reach boot menus.
-# - Consider a separate encrypted /data or /home (repeat LUKS + mkfs).
-# - Add another LUKS key:
-#   sudo cryptsetup luksAddKey ${DISK}p3
-
-
-# 
-# TROUBLESHOOTING (“DEVICE BUSY”, USB ODDITIES)
-# 
-
-# Who has the device open?
-# sudo lsof /dev/sda /dev/sda?*     # or /dev/nvme0n1 /dev/nvme0n1p?
-
-# If dd is stuck, send Ctrl+C (replace PID):
-# ps -o pid,stat,cmd -p 45556,49939
-# sudo kill -INT 45556
-
-# Soft re-plug a USB root port (adjust bus like "1-5"):
-# echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/unbind
-# sleep 2
-# echo 1-5 | sudo tee /sys/bus/usb/drivers/usb/bind
-
-# Refresh partition table and re-check:
-# sudo partprobe /dev/sda || sudo blockdev --rereadpt /dev/sda
-# lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL /dev/sda
-# sudo blkid /dev/sda*
-
-
-
-# ==============================================================================
-# END OF FILE
-# ==============================================================================
-
+# Mount
+sudo mkdir -p /data
+sudo mount /dev/nvme0n1p4 /data
+df -hT /data
+# Optional: reduce ext4 reserved space on data volume
+sudo tune2fs -m 1 /dev/nvme0n1p4
+Arch/Linux philosophy: Keep it simple (but not simplistic). Understand what each command does before you run it.
